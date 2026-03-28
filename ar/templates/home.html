@@ -1,0 +1,115 @@
+ {% load static %}
+<html>
+<head>
+    <title>Home</title>
+
+</head>
+<body>
+    <div id="video-container">
+          <video id="front-camera" autoplay="" playsinline="" muted=""></video>
+    </div>
+    <canvas id="output-canvas"></canvas>
+    <p id="status">Waiting for OpenCV...</p>
+    <script>
+        const videoEl = document.getElementById('front-camera');
+        const canvasEl = document.getElementById('output-canvas');
+        const statusEl = document.getElementById('status');
+        const ctx = canvasEl.getContext('2d');
+
+        let mediaStream = null;
+        let animationId = null;
+        let started = false;
+
+        function setStatus(text) {
+            statusEl.textContent = text;
+        }
+
+        function waitForVideoMetadata(video) {
+            if (video.readyState >= 1 && video.videoWidth > 0 && video.videoHeight > 0) {
+                return Promise.resolve();
+            }
+
+            return new Promise((resolve) => {
+                video.addEventListener('loadedmetadata', () => resolve(), { once: true });
+            });
+        }
+
+        async function startCamera() {
+            try {
+                // Request webcam stream and attach it to the input video element.
+                mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                videoEl.srcObject = mediaStream;
+                await videoEl.play();
+                await waitForVideoMetadata(videoEl);
+            } catch (error) {
+                setStatus('Camera access failed. Please allow webcam permissions.');
+                throw error;
+            }
+        }
+
+        function processFrame() {
+            if (!window.cv || videoEl.videoWidth === 0 || videoEl.videoHeight === 0) {
+                animationId = requestAnimationFrame(processFrame);
+                return;
+            }
+
+            ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
+
+            const frame = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
+            const src = cv.matFromImageData(frame);
+            const gray = new cv.Mat();
+            const dst = new cv.Mat();
+
+            cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+            cv.cvtColor(gray, dst, cv.COLOR_GRAY2RGBA);
+
+            frame.data.set(dst.data);
+            ctx.putImageData(frame, 0, 0);
+
+            src.delete();
+            gray.delete();
+            dst.delete();
+
+            animationId = requestAnimationFrame(processFrame);
+        }
+
+        async function initializePipeline() {
+            if (started) {
+                return;
+            }
+
+            started = true;
+            setStatus('Starting camera...');
+
+            await startCamera();
+
+            canvasEl.width = videoEl.videoWidth;
+            canvasEl.height = videoEl.videoHeight;
+
+            setStatus('Processing video with OpenCV.js');
+            animationId = requestAnimationFrame(processFrame);
+        }
+
+        function onOpenCvReady() {
+            if (!window.cv) {
+                setStatus('OpenCV failed to load.');
+                return;
+            }
+
+            if (typeof cv.getBuildInformation === 'function') {
+                initializePipeline().catch((error) => {
+                    console.error(error);
+                });
+                return;
+            }
+
+            cv.onRuntimeInitialized = () => {
+                initializePipeline().catch((error) => {
+                    console.error(error);
+                });
+            };
+        }
+    </script>
+    <script async src="{% static 'opencv-4.13.0.js' %}" onload="onOpenCvReady();" type="text/javascript"></script>
+</body>
+</html>
