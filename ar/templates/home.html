@@ -57,18 +57,68 @@
 
             const frame = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
             const src = cv.matFromImageData(frame);
-            const gray = new cv.Mat();
             const dst = new cv.Mat();
+            
+            // Convert image to grayscale and apply a threshold
+            cv.cvtColor(src, dst, cv.COLOR_RGBA2GRAY);
+            cv.threshold(dst, dst, 127, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+            
+            let contours = new cv.MatVector();
+            let hierarchies = new cv.Mat();
+            cv.findContours(dst, contours, hierarchies, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE);
 
-            cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-            cv.cvtColor(gray, dst, cv.COLOR_GRAY2RGBA);
+            // Draw contours on the original image
+            // Convert back to RGBA for display
+            cv.cvtColor(dst, dst, cv.COLOR_GRAY2RGBA);
+            probable_markers = {};
+            for (let i = 0; i < contours.size(); ++i) {
+                // Draw all contours
+                const color = new cv.Scalar(100, 200, 255, 255);
+                cv.drawContours(dst, contours, i, color, 2, cv.LINE_8, hierarchies, 100);
+
+                min_area = 100;
+                epsilon = 0.03 * cv.arcLength(contours.get(i), true);
+                const approx = new cv.Mat();
+                cv.approxPolyDP(contours.get(i), approx, epsilon, true);
+
+                if (approx.rows === 4 && cv.contourArea(approx) > min_area && cv.isContourConvex(approx)) {
+                    // Draw the approximated contour in green
+                    const approxColor = new cv.Scalar(0, 255, 0, 255);
+                    let contour = new cv.MatVector();
+                    contour.push_back(approx);
+                    cv.drawContours(dst, contour, -1, approxColor, 2, cv.LINE_8);
+                    contour.delete();
+                    // Store the approximated contour as a probable marker
+                    probable_markers[i] = approx;
+                    // Verify if the contour has a parent (i.e., it's nested inside another contour)
+                    // Hierarchies are stored in the format [ ID Next contour, ID of Previous Contour, ID of First Child contour, ID of Parent contour ]
+                    let contour_parent = hierarchies.intPtr(0, i)[3]
+                    if (contour_parent in probable_markers) {
+                        // remove the parent contour from probable markers if it has a child contour that is also a probable marker
+                        delete probable_markers[contour_parent];
+                    }
+                }
+            }
+
+            for (marker in probable_markers) {
+                const approxColor = new cv.Scalar(255, 0, 0, 255);
+                let contour = new cv.MatVector();
+                contour.push_back(probable_markers[marker]);
+                cv.drawContours(dst, contour, -1, approxColor, 2, cv.LINE_8);
+                contour.delete();
+            }
 
             frame.data.set(dst.data);
             ctx.putImageData(frame, 0, 0);
 
             src.delete();
-            gray.delete();
             dst.delete();
+            for (marker in probable_markers) {
+                probable_markers[marker].delete();
+            }
+            probable_markers = {};
+            contours.delete();
+            hierarchies.delete();
 
             animationId = requestAnimationFrame(processFrame);
         }
