@@ -1,0 +1,55 @@
+#main-view {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+#video-container,
+#output-canvas {
+    flex: 0 0 auto;
+}
+
+#controls-panel {
+    margin-top: 12px;
+    padding: 10px;
+    border: 1px solid #ccc;
+    max-width: 920px;
+    font-family: sans-serif;
+}
+
+#controls-panel h3 {
+    margin: 0 0 10px 0;
+    font-size: 16px;
+}
+
+#controls-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 8px 14px;
+}
+
+.control-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+}
+
+.control-item label {
+    width: 160px;
+}
+
+.control-item input[type="range"] {
+    flex: 1;
+}
+
+.control-value {
+    min-width: 52px;
+    text-align: right;
+    font-family: monospace;
+}
+
+.control-item.checkbox {
+    justify-content: flex-start;
+}

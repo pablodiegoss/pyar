@@ -24,7 +24,35 @@ function orderPoints(approx) {
     mid.sort((a, b) => (a.y - a.x) - (b.y - b.x));
     return [tl, mid[0], br, mid[1]];
 }
-
+function getSideRatio(approx) {
+    const sides = [];
+    for (let i = 0; i < 4; i++) {
+        const x1 = approx.data32S[i * 2];
+        const y1 = approx.data32S[i * 2 + 1];
+        const x2 = approx.data32S[((i + 1) % 4) * 2];
+        const y2 = approx.data32S[((i + 1) % 4) * 2 + 1];
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        sides.push(dist);
+    }
+    const minSide = Math.min(...sides);
+    const maxSide = Math.max(...sides);
+    return minSide > 0 ? (maxSide / minSide) : Infinity;
+}
+function centroidKey(approx) {
+    let cx = 0;
+    let cy = 0;
+    for (let i = 0; i < 4; i++) {
+        cx += approx.data32S[i * 2];
+        cy += approx.data32S[i * 2 + 1];
+    }
+    cx /= 4;
+    cy /= 4;
+    const gx = Math.floor(cx / config.centroidGrid);
+    const gy = Math.floor(cy / config.centroidGrid);
+    return `${gx},${gy}`;
+}
 function waitForVideoMetadata(video) {
     if (video.readyState >= 1 && video.videoWidth > 0 && video.videoHeight > 0) {
         return Promise.resolve();

@@ -2,16 +2,37 @@
 <html>
 <head>
     <title>Home</title>
-
+    <link rel="stylesheet" href="{% static 'main.css' %}">
 </head>
 <body>
-    <div id="video-container">
+    <div id="main-view">
+      <div id="video-container">
           <video id="front-camera" autoplay="" playsinline="" muted=""></video>
+      </div>
+      <canvas id="output-canvas"></canvas>
     </div>
-    <canvas id="output-canvas"></canvas>
-    <canvas id="debug-canvas" style="border: 1px solid #ccc; margin-top: 10px; display: none;"></canvas>
     <p id="status">Waiting for OpenCV...</p>
+    <div id="controls-panel">
+        <h3>Runtime Tuning</h3>
+        <div id="controls-grid">
+            <div class="control-item"><label for="ctrl-warp-size">Warp Size</label><input id="ctrl-warp-size" type="range" min="64" max="256" step="8"><span id="val-warp-size" class="control-value"></span></div>
+            <div class="control-item"><label for="ctrl-border-size">Border Size</label><input id="ctrl-border-size" type="range" min="4" max="64" step="1"><span id="val-border-size" class="control-value"></span></div>
+            <div class="control-item"><label for="ctrl-interior-size">Interior Size</label><input id="ctrl-interior-size" type="range" min="16" max="192" step="1"><span id="val-interior-size" class="control-value"></span></div>
+            <div class="control-item"><label for="ctrl-epsilon-coeff">Epsilon Coeff</label><input id="ctrl-epsilon-coeff" type="range" min="0.01" max="0.05" step="0.005"><span id="val-epsilon-coeff" class="control-value"></span></div>
+            <div class="control-item"><label for="ctrl-min-area">Min Area</label><input id="ctrl-min-area" type="range" min="200" max="2000" step="50"><span id="val-min-area" class="control-value"></span></div>
+            <div class="control-item"><label for="ctrl-max-side-ratio">Max Side Ratio</label><input id="ctrl-max-side-ratio" type="range" min="1.0" max="10.0" step="0.1"><span id="val-max-side-ratio" class="control-value"></span></div>
+            <div class="control-item"><label for="ctrl-black-border-threshold">Black Border Threshold</label><input id="ctrl-black-border-threshold" type="range" min="0.5" max="0.95" step="0.05"><span id="val-black-border-threshold" class="control-value"></span></div>
+            <div class="control-item"><label for="ctrl-binary-threshold">Binary Threshold</label><input id="ctrl-binary-threshold" type="range" min="0" max="255" step="1"><span id="val-binary-threshold" class="control-value"></span></div>
+            <div class="control-item checkbox"><label for="ctrl-use-otsu">Use Otsu</label><input id="ctrl-use-otsu" type="checkbox"></div>
+            <div class="control-item"><label for="ctrl-temporal-confirm-frames">Temporal Confirm Frames</label><input id="ctrl-temporal-confirm-frames" type="range" min="1" max="8" step="1"><span id="val-temporal-confirm-frames" class="control-value"></span></div>
+            <div class="control-item"><label for="ctrl-track-stale-frames">Track Stale Frames</label><input id="ctrl-track-stale-frames" type="range" min="2" max="12" step="1"><span id="val-track-stale-frames" class="control-value"></span></div>
+            <div class="control-item"><label for="ctrl-centroid-grid">Centroid Grid</label><input id="ctrl-centroid-grid" type="range" min="4" max="32" step="1"><span id="val-centroid-grid" class="control-value"></span></div>
+            <div class="control-item"><label for="ctrl-process-every-n-frames">Process Every N Frames</label><input id="ctrl-process-every-n-frames" type="range" min="1" max="4" step="1"><span id="val-process-every-n-frames" class="control-value"></span></div>
+        </div>
+    </div>
+    <canvas id="debug-canvas" style="border: 1px solid #ccc; margin-top: 10px; display: none;"></canvas>
     <script src="{% static 'ar-detection-utils.js' %}"></script>
+    <script src="{% static 'debug-ui.js' %}"></script>
     <script>
         const videoEl = document.getElementById('front-camera');
         const canvasEl = document.getElementById('output-canvas');
@@ -19,22 +40,29 @@
         const debugCtx = debugCanvasEl.getContext('2d');
         const statusEl = document.getElementById('status');
         const ctx = canvasEl.getContext('2d');
+        
+        const DEFAULTS = {
+            warpSize: 128,
+            borderSize: 26,
+            interiorSize: 76,
+            temporalConfirmFrames: 4,
+            trackStaleFrames: 6,
+            centroidGrid: 22,
+            minArea: 500,
+            epsilonCoeff: 0.025,
+            blackBorderThreshold: 0.65,
+            processEveryNFrames: 1,
+            binaryThreshold: 160,
+            useOtsu: true,
+            maxSideRatio: 2.0,
+            edgeMarginPx: 10
+        };
 
-        const WARP_SIZE = 128;
-        const BORDER = 26;
-        // const INTERIOR_SIZE = WARP_SIZE - 2 * BORDER;
-        const INTERIOR_SIZE = 76;
-        const TEMPORAL_CONFIRM_FRAMES = 3;
-        const TRACK_STALE_FRAMES = 4;
-        const CENTROID_GRID = 12;
-        const MIN_AREA = 500;
-        const EPSILON_COEFF = 0.03;
-        const BLACK_BORDER_THRESHOLD = 0.75;
+        const config = { ...DEFAULTS };
 
         const DEBUG_MODE = true;
         const DEBUG_GRID_SIZE = 6;
         const DEBUG_DISPLAY_SIZE = 128;
-
 
         let mediaStream = null;
         let animationId = null;
@@ -44,65 +72,7 @@
         const tracks = new Map();
         const debugWarps = [];
 
-        function addDebugWarp(colorWarpMat) {
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = WARP_SIZE;
-            tempCanvas.height = WARP_SIZE;
-            // Use OpenCV's built-in imshow to render Mat to canvas
-            cv.imshow(tempCanvas, colorWarpMat);
-            debugWarps.push(tempCanvas);
-            if (debugWarps.length > DEBUG_GRID_SIZE * DEBUG_GRID_SIZE) {
-                debugWarps.shift();
-            }
-        }
-
-        function drawDebugGrid() {
-            if (!DEBUG_MODE) return;
-            if (debugWarps.length === 0) {
-                debugCanvasEl.style.display = 'none';
-                debugCtx.clearRect(0, 0, debugCanvasEl.width, debugCanvasEl.height);
-                return;
-            }
-            debugCanvasEl.style.display = 'block';
-            const cols = DEBUG_GRID_SIZE;
-            const rows = Math.ceil(debugWarps.length / cols);
-            const spacing = 4;
-            debugCanvasEl.width = cols * DEBUG_DISPLAY_SIZE + (cols - 1) * spacing;
-            debugCanvasEl.height = rows * DEBUG_DISPLAY_SIZE + (rows - 1) * spacing;
-            debugCtx.fillStyle = '#000';
-            debugCtx.fillRect(0, 0, debugCanvasEl.width, debugCanvasEl.height);
-
-            for (let idx = 0; idx < debugWarps.length; ++idx) {
-                const col = idx % cols;
-                const row = Math.floor(idx / cols);
-                const x = col * (DEBUG_DISPLAY_SIZE + spacing);
-                const y = row * (DEBUG_DISPLAY_SIZE + spacing);
-
-                // Draw warp (sem escala)
-                debugCtx.drawImage(debugWarps[idx], x, y, DEBUG_DISPLAY_SIZE, DEBUG_DISPLAY_SIZE);
-
-                // Red border: retângulo externo (borda 26px cada lado)
-                debugCtx.strokeStyle = '#ff0000';
-                debugCtx.lineWidth = 2;
-                debugCtx.strokeRect(x + BORDER, y + BORDER, 
-                                   DEBUG_DISPLAY_SIZE - 2 * BORDER, 
-                                   DEBUG_DISPLAY_SIZE - 2 * BORDER);
-
-                // Green interior: retângulo do interior (76×76 no center)
-                debugCtx.strokeStyle = '#00ff00';
-                debugCtx.lineWidth = 2;
-                debugCtx.strokeRect(x + BORDER, y + BORDER, INTERIOR_SIZE, INTERIOR_SIZE);
-
-                // White dot: centroid
-                const centroidX = x + DEBUG_DISPLAY_SIZE / 2;
-                const centroidY = y + DEBUG_DISPLAY_SIZE / 2;
-                debugCtx.fillStyle = '#ffffff';
-                debugCtx.beginPath();
-                debugCtx.arc(centroidX, centroidY, 4, 0, 2 * Math.PI);
-                debugCtx.fill();
-            }
-        }
-
+    
         function setStatus(text) {
             statusEl.textContent = text;
         }
@@ -116,33 +86,30 @@
                 ordered[3].x, ordered[3].y,
             ]);
             const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
-                0,             0,
-                WARP_SIZE - 1, 0,
-                WARP_SIZE - 1, WARP_SIZE - 1,
-                0,             WARP_SIZE - 1,
+                0,                 0,
+                config.warpSize-1, 0,
+                config.warpSize-1, config.warpSize-1,
+                0,                 config.warpSize-1,
             ]);
 
             const M = cv.getPerspectiveTransform(srcPts, dstPts);
-            
-            // Warp grayscale for photometric validation
             const warped = new cv.Mat();
-            cv.warpPerspective(grayBinary, warped, M, new cv.Size(WARP_SIZE, WARP_SIZE));
+            cv.warpPerspective(grayBinary, warped, M, new cv.Size(config.warpSize, config.warpSize));
 
             const fullMean = cv.mean(warped)[0];
-            const innerRect = new cv.Rect(BORDER, BORDER, INTERIOR_SIZE, INTERIOR_SIZE);
+            const innerRect = new cv.Rect(config.borderSize, config.borderSize, config.interiorSize, config.interiorSize);
             const innerRoi = warped.roi(innerRect);
             const innerMean = cv.mean(innerRoi)[0];
 
-            const borderArea = WARP_SIZE * WARP_SIZE - INTERIOR_SIZE * INTERIOR_SIZE;
-            const borderSum = fullMean * WARP_SIZE * WARP_SIZE - innerMean * INTERIOR_SIZE * INTERIOR_SIZE;
+            const borderArea = config.warpSize * config.warpSize - config.interiorSize * config.interiorSize;
+            const borderSum = fullMean * config.warpSize * config.warpSize - innerMean * config.interiorSize * config.interiorSize;
             const borderBlackRatio = 1 - (borderSum / borderArea) / 255;
 
             let interior = null;
-            if (borderBlackRatio >= BLACK_BORDER_THRESHOLD) {
-                // Warp original color image for debug visualization
+            if (borderBlackRatio >= config.blackBorderThreshold) {
                 if (DEBUG_MODE && originalSrc) {
                     const colorWarped = new cv.Mat();
-                    cv.warpPerspective(originalSrc, colorWarped, M, new cv.Size(WARP_SIZE, WARP_SIZE));
+                    cv.warpPerspective(originalSrc, colorWarped, M, new cv.Size(config.warpSize, config.warpSize));
                     addDebugWarp(colorWarped);
                     colorWarped.delete();
                 }
@@ -156,20 +123,6 @@
             warped.delete();
 
             return interior;
-        }
-
-        function centroidKey(approx) {
-            let cx = 0;
-            let cy = 0;
-            for (let i = 0; i < 4; i++) {
-                cx += approx.data32S[i * 2];
-                cy += approx.data32S[i * 2 + 1];
-            }
-            cx /= 4;
-            cy /= 4;
-            const gx = Math.floor(cx / CENTROID_GRID);
-            const gy = Math.floor(cy / CENTROID_GRID);
-            return `${gx},${gy}`;
         }
 
         function updateTrack(key, approx) {
@@ -191,7 +144,7 @@
 
         function pruneStaleTracks() {
             for (const [key, track] of tracks.entries()) {
-                if (frameNumber - track.lastSeen > TRACK_STALE_FRAMES) {
+                if (frameNumber - track.lastSeen > config.trackStaleFrames) {
                     track.approx.delete();
                     tracks.delete(key);
                 }
@@ -205,10 +158,9 @@
             }
 
             frameNumber += 1;
-            // Process only every third frame for debugging
-            if (frameNumber % 3 !== 0) {
+            if (frameNumber % config.processEveryNFrames !== 0) {
                 animationId = requestAnimationFrame(processFrame);
-            return;
+                return;
             }
 
             ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
@@ -221,7 +173,8 @@
             debugWarps.length = 0;
 
             cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-            cv.threshold(gray, gray, 127, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+            const thresholdType = config.useOtsu ? (cv.THRESH_BINARY | cv.THRESH_OTSU) : cv.THRESH_BINARY;
+            cv.threshold(gray, gray, config.binaryThreshold, 255, thresholdType);
 
             const contours = new cv.MatVector();
             const hierarchies = new cv.Mat();
@@ -233,25 +186,45 @@
             for (let i = 0; i < contours.size(); ++i) {
                 const contour = contours.get(i);
 
-                const epsilon = EPSILON_COEFF * cv.arcLength(contour, true);
+                const epsilon = config.epsilonCoeff * cv.arcLength(contour, true);
                 const approx = new cv.Mat();
                 cv.approxPolyDP(contour, approx, epsilon, true);
                 contour.delete();
+                
 
-                if (approx.rows === 4 && cv.contourArea(approx) > MIN_AREA && cv.isContourConvex(approx)) {
-                    probableMarkers[i] = approx;
+                const rect = cv.boundingRect(approx);
+                const touchesBorder =
+                    rect.x <= config.edgeMarginPx ||
+                    rect.y <= config.edgeMarginPx ||
+                    rect.x + rect.width >= canvasEl.width - config.edgeMarginPx ||
+                    rect.y + rect.height >= canvasEl.height - config.edgeMarginPx;
+
+                if (approx.rows === 4 && cv.contourArea(approx) > config.minArea && cv.isContourConvex(approx) && getSideRatio(approx) <= config.maxSideRatio && !touchesBorder) {
+                    
+                    
                     const parent = hierarchies.intPtr(0, i)[3];
                     if (parent in probableMarkers) {
-                        probableMarkers[parent].delete();
-                        delete probableMarkers[parent];
+                        // probableMarkers[parent].delete();
+                        // delete probableMarkers[parent];
+                    }else{
+                        probableMarkers[i] = approx;
+                        
                     }
                 } else {
                     approx.delete();
                 }
             }
 
-            for (const marker in probableMarkers) {
-                const approx = probableMarkers[marker];
+            for (const id in probableMarkers) {
+                const approx = probableMarkers[id];
+
+                // draw contours for debugging
+                const debugColor = new cv.Scalar(0, 255, 0, 255);
+                const contourVec = new cv.MatVector();
+                contourVec.push_back(approx);
+                cv.drawContours(dst, contourVec, -1, debugColor, 2, cv.LINE_8);
+                contourVec.delete();
+
                 const interior = warpAndCheckMarker(approx, gray, src);
 
                 if (interior !== null) {
@@ -267,7 +240,7 @@
 
             let confirmedCount = 0;
             for (const track of tracks.values()) {
-                if (track.consecutive >= TEMPORAL_CONFIRM_FRAMES) {
+                if (track.consecutive >= config.temporalConfirmFrames) {
                     confirmedCount += 1;
                     const confirmedColor = new cv.Scalar(255, 0, 0, 255);
                     const contourVec = new cv.MatVector();
@@ -298,6 +271,9 @@
 
             animationId = requestAnimationFrame(processFrame);
         }
+
+        bindControls();
+        syncControls();
     </script>
     <script async src="{% static 'opencv-4.13.0.js' %}" onload="onOpenCvReady();" type="text/javascript"></script>
 </body>
