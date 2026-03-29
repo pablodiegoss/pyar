@@ -9,41 +9,192 @@
           <video id="front-camera" autoplay="" playsinline="" muted=""></video>
     </div>
     <canvas id="output-canvas"></canvas>
+    <canvas id="debug-canvas" style="border: 1px solid #ccc; margin-top: 10px; display: none;"></canvas>
     <p id="status">Waiting for OpenCV...</p>
+    <script src="{% static 'ar-detection-utils.js' %}"></script>
     <script>
         const videoEl = document.getElementById('front-camera');
         const canvasEl = document.getElementById('output-canvas');
+        const debugCanvasEl = document.getElementById('debug-canvas');
+        const debugCtx = debugCanvasEl.getContext('2d');
         const statusEl = document.getElementById('status');
         const ctx = canvasEl.getContext('2d');
+
+        const WARP_SIZE = 128;
+        const BORDER = 26;
+        // const INTERIOR_SIZE = WARP_SIZE - 2 * BORDER;
+        const INTERIOR_SIZE = 76;
+        const TEMPORAL_CONFIRM_FRAMES = 3;
+        const TRACK_STALE_FRAMES = 4;
+        const CENTROID_GRID = 12;
+        const MIN_AREA = 500;
+        const EPSILON_COEFF = 0.03;
+        const BLACK_BORDER_THRESHOLD = 0.75;
+
+        const DEBUG_MODE = true;
+        const DEBUG_GRID_SIZE = 6;
+        const DEBUG_DISPLAY_SIZE = 128;
+
 
         let mediaStream = null;
         let animationId = null;
         let started = false;
+        let frameNumber = 0;
+
+        const tracks = new Map();
+        const debugWarps = [];
+
+        function addDebugWarp(colorWarpMat) {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = WARP_SIZE;
+            tempCanvas.height = WARP_SIZE;
+            // Use OpenCV's built-in imshow to render Mat to canvas
+            cv.imshow(tempCanvas, colorWarpMat);
+            debugWarps.push(tempCanvas);
+            if (debugWarps.length > DEBUG_GRID_SIZE * DEBUG_GRID_SIZE) {
+                debugWarps.shift();
+            }
+        }
+
+        function drawDebugGrid() {
+            if (!DEBUG_MODE) return;
+            if (debugWarps.length === 0) {
+                debugCanvasEl.style.display = 'none';
+                debugCtx.clearRect(0, 0, debugCanvasEl.width, debugCanvasEl.height);
+                return;
+            }
+            debugCanvasEl.style.display = 'block';
+            const cols = DEBUG_GRID_SIZE;
+            const rows = Math.ceil(debugWarps.length / cols);
+            const spacing = 4;
+            debugCanvasEl.width = cols * DEBUG_DISPLAY_SIZE + (cols - 1) * spacing;
+            debugCanvasEl.height = rows * DEBUG_DISPLAY_SIZE + (rows - 1) * spacing;
+            debugCtx.fillStyle = '#000';
+            debugCtx.fillRect(0, 0, debugCanvasEl.width, debugCanvasEl.height);
+
+            for (let idx = 0; idx < debugWarps.length; ++idx) {
+                const col = idx % cols;
+                const row = Math.floor(idx / cols);
+                const x = col * (DEBUG_DISPLAY_SIZE + spacing);
+                const y = row * (DEBUG_DISPLAY_SIZE + spacing);
+
+                // Draw warp (sem escala)
+                debugCtx.drawImage(debugWarps[idx], x, y, DEBUG_DISPLAY_SIZE, DEBUG_DISPLAY_SIZE);
+
+                // Red border: retângulo externo (borda 26px cada lado)
+                debugCtx.strokeStyle = '#ff0000';
+                debugCtx.lineWidth = 2;
+                debugCtx.strokeRect(x + BORDER, y + BORDER, 
+                                   DEBUG_DISPLAY_SIZE - 2 * BORDER, 
+                                   DEBUG_DISPLAY_SIZE - 2 * BORDER);
+
+                // Green interior: retângulo do interior (76×76 no center)
+                debugCtx.strokeStyle = '#00ff00';
+                debugCtx.lineWidth = 2;
+                debugCtx.strokeRect(x + BORDER, y + BORDER, INTERIOR_SIZE, INTERIOR_SIZE);
+
+                // White dot: centroid
+                const centroidX = x + DEBUG_DISPLAY_SIZE / 2;
+                const centroidY = y + DEBUG_DISPLAY_SIZE / 2;
+                debugCtx.fillStyle = '#ffffff';
+                debugCtx.beginPath();
+                debugCtx.arc(centroidX, centroidY, 4, 0, 2 * Math.PI);
+                debugCtx.fill();
+            }
+        }
 
         function setStatus(text) {
             statusEl.textContent = text;
         }
 
-        function waitForVideoMetadata(video) {
-            if (video.readyState >= 1 && video.videoWidth > 0 && video.videoHeight > 0) {
-                return Promise.resolve();
+        function warpAndCheckMarker(approx, grayBinary, originalSrc) {
+            const ordered = orderPoints(approx);
+            const srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+                ordered[0].x, ordered[0].y,
+                ordered[1].x, ordered[1].y,
+                ordered[2].x, ordered[2].y,
+                ordered[3].x, ordered[3].y,
+            ]);
+            const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+                0,             0,
+                WARP_SIZE - 1, 0,
+                WARP_SIZE - 1, WARP_SIZE - 1,
+                0,             WARP_SIZE - 1,
+            ]);
+
+            const M = cv.getPerspectiveTransform(srcPts, dstPts);
+            
+            // Warp grayscale for photometric validation
+            const warped = new cv.Mat();
+            cv.warpPerspective(grayBinary, warped, M, new cv.Size(WARP_SIZE, WARP_SIZE));
+
+            const fullMean = cv.mean(warped)[0];
+            const innerRect = new cv.Rect(BORDER, BORDER, INTERIOR_SIZE, INTERIOR_SIZE);
+            const innerRoi = warped.roi(innerRect);
+            const innerMean = cv.mean(innerRoi)[0];
+
+            const borderArea = WARP_SIZE * WARP_SIZE - INTERIOR_SIZE * INTERIOR_SIZE;
+            const borderSum = fullMean * WARP_SIZE * WARP_SIZE - innerMean * INTERIOR_SIZE * INTERIOR_SIZE;
+            const borderBlackRatio = 1 - (borderSum / borderArea) / 255;
+
+            let interior = null;
+            if (borderBlackRatio >= BLACK_BORDER_THRESHOLD) {
+                // Warp original color image for debug visualization
+                if (DEBUG_MODE && originalSrc) {
+                    const colorWarped = new cv.Mat();
+                    cv.warpPerspective(originalSrc, colorWarped, M, new cv.Size(WARP_SIZE, WARP_SIZE));
+                    addDebugWarp(colorWarped);
+                    colorWarped.delete();
+                }
+                interior = innerRoi.clone();
             }
 
-            return new Promise((resolve) => {
-                video.addEventListener('loadedmetadata', () => resolve(), { once: true });
-            });
+            srcPts.delete();
+            dstPts.delete();
+            M.delete();
+            innerRoi.delete();
+            warped.delete();
+
+            return interior;
         }
 
-        async function startCamera() {
-            try {
-                // Request webcam stream and attach it to the input video element.
-                mediaStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-                videoEl.srcObject = mediaStream;
-                await videoEl.play();
-                await waitForVideoMetadata(videoEl);
-            } catch (error) {
-                setStatus('Camera access failed. Please allow webcam permissions.');
-                throw error;
+        function centroidKey(approx) {
+            let cx = 0;
+            let cy = 0;
+            for (let i = 0; i < 4; i++) {
+                cx += approx.data32S[i * 2];
+                cy += approx.data32S[i * 2 + 1];
+            }
+            cx /= 4;
+            cy /= 4;
+            const gx = Math.floor(cx / CENTROID_GRID);
+            const gy = Math.floor(cy / CENTROID_GRID);
+            return `${gx},${gy}`;
+        }
+
+        function updateTrack(key, approx) {
+            const prev = tracks.get(key);
+            if (!prev) {
+                tracks.set(key, {
+                    consecutive: 1,
+                    lastSeen: frameNumber,
+                    approx: approx.clone(),
+                });
+                return;
+            }
+
+            prev.consecutive = prev.lastSeen === frameNumber - 1 ? prev.consecutive + 1 : 1;
+            prev.lastSeen = frameNumber;
+            prev.approx.delete();
+            prev.approx = approx.clone();
+        }
+
+        function pruneStaleTracks() {
+            for (const [key, track] of tracks.entries()) {
+                if (frameNumber - track.lastSeen > TRACK_STALE_FRAMES) {
+                    track.approx.delete();
+                    tracks.delete(key);
+                }
             }
         }
 
@@ -53,111 +204,99 @@
                 return;
             }
 
+            frameNumber += 1;
+            // Process only every third frame for debugging
+            if (frameNumber % 3 !== 0) {
+                animationId = requestAnimationFrame(processFrame);
+            return;
+            }
+
             ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
 
             const frame = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
             const src = cv.matFromImageData(frame);
+            const gray = new cv.Mat();
             const dst = new cv.Mat();
-            
-            // Convert image to grayscale and apply a threshold
-            cv.cvtColor(src, dst, cv.COLOR_RGBA2GRAY);
-            cv.threshold(dst, dst, 127, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
-            
-            let contours = new cv.MatVector();
-            let hierarchies = new cv.Mat();
-            cv.findContours(dst, contours, hierarchies, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE);
 
-            // Draw contours on the original image
-            // Convert back to RGBA for display
-            cv.cvtColor(dst, dst, cv.COLOR_GRAY2RGBA);
-            probable_markers = {};
+            debugWarps.length = 0;
+
+            cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+            cv.threshold(gray, gray, 127, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+
+            const contours = new cv.MatVector();
+            const hierarchies = new cv.Mat();
+            cv.findContours(gray, contours, hierarchies, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE);
+            cv.cvtColor(gray, dst, cv.COLOR_GRAY2RGBA);
+
+            const probableMarkers = {};
+
             for (let i = 0; i < contours.size(); ++i) {
-                // Draw all contours
-                const color = new cv.Scalar(100, 200, 255, 255);
-                cv.drawContours(dst, contours, i, color, 2, cv.LINE_8, hierarchies, 100);
+                const contour = contours.get(i);
 
-                min_area = 100;
-                epsilon = 0.03 * cv.arcLength(contours.get(i), true);
+                const epsilon = EPSILON_COEFF * cv.arcLength(contour, true);
                 const approx = new cv.Mat();
-                cv.approxPolyDP(contours.get(i), approx, epsilon, true);
+                cv.approxPolyDP(contour, approx, epsilon, true);
+                contour.delete();
 
-                if (approx.rows === 4 && cv.contourArea(approx) > min_area && cv.isContourConvex(approx)) {
-                    // Draw the approximated contour in green
-                    const approxColor = new cv.Scalar(0, 255, 0, 255);
-                    let contour = new cv.MatVector();
-                    contour.push_back(approx);
-                    cv.drawContours(dst, contour, -1, approxColor, 2, cv.LINE_8);
-                    contour.delete();
-                    // Store the approximated contour as a probable marker
-                    probable_markers[i] = approx;
-                    // Verify if the contour has a parent (i.e., it's nested inside another contour)
-                    // Hierarchies are stored in the format [ ID Next contour, ID of Previous Contour, ID of First Child contour, ID of Parent contour ]
-                    let contour_parent = hierarchies.intPtr(0, i)[3]
-                    if (contour_parent in probable_markers) {
-                        // remove the parent contour from probable markers if it has a child contour that is also a probable marker
-                        delete probable_markers[contour_parent];
+                if (approx.rows === 4 && cv.contourArea(approx) > MIN_AREA && cv.isContourConvex(approx)) {
+                    probableMarkers[i] = approx;
+                    const parent = hierarchies.intPtr(0, i)[3];
+                    if (parent in probableMarkers) {
+                        probableMarkers[parent].delete();
+                        delete probableMarkers[parent];
                     }
+                } else {
+                    approx.delete();
                 }
             }
 
-            for (marker in probable_markers) {
-                const approxColor = new cv.Scalar(255, 0, 0, 255);
-                let contour = new cv.MatVector();
-                contour.push_back(probable_markers[marker]);
-                cv.drawContours(dst, contour, -1, approxColor, 2, cv.LINE_8);
-                contour.delete();
+            for (const marker in probableMarkers) {
+                const approx = probableMarkers[marker];
+                const interior = warpAndCheckMarker(approx, gray, src);
+
+                if (interior !== null) {
+                    const key = centroidKey(approx);
+                    updateTrack(key, approx);
+                    interior.delete();
+                }
+
+                approx.delete();
+            }
+
+            pruneStaleTracks();
+
+            let confirmedCount = 0;
+            for (const track of tracks.values()) {
+                if (track.consecutive >= TEMPORAL_CONFIRM_FRAMES) {
+                    confirmedCount += 1;
+                    const confirmedColor = new cv.Scalar(255, 0, 0, 255);
+                    const contourVec = new cv.MatVector();
+                    contourVec.push_back(track.approx);
+                    cv.drawContours(dst, contourVec, -1, confirmedColor, 3, cv.LINE_8);
+                    contourVec.delete();
+                }
+            }
+
+            if (confirmedCount > 0) {
+                setStatus(`Markers confirmed: ${confirmedCount}`);
+            } else {
+                setStatus('Processing video with OpenCV.js');
+            }
+
+            if (DEBUG_MODE) {
+                drawDebugGrid();
             }
 
             frame.data.set(dst.data);
             ctx.putImageData(frame, 0, 0);
 
             src.delete();
+            gray.delete();
             dst.delete();
-            for (marker in probable_markers) {
-                probable_markers[marker].delete();
-            }
-            probable_markers = {};
             contours.delete();
             hierarchies.delete();
 
             animationId = requestAnimationFrame(processFrame);
-        }
-
-        async function initializePipeline() {
-            if (started) {
-                return;
-            }
-
-            started = true;
-            setStatus('Starting camera...');
-
-            await startCamera();
-
-            canvasEl.width = videoEl.videoWidth;
-            canvasEl.height = videoEl.videoHeight;
-
-            setStatus('Processing video with OpenCV.js');
-            animationId = requestAnimationFrame(processFrame);
-        }
-
-        function onOpenCvReady() {
-            if (!window.cv) {
-                setStatus('OpenCV failed to load.');
-                return;
-            }
-
-            if (typeof cv.getBuildInformation === 'function') {
-                initializePipeline().catch((error) => {
-                    console.error(error);
-                });
-                return;
-            }
-
-            cv.onRuntimeInitialized = () => {
-                initializePipeline().catch((error) => {
-                    console.error(error);
-                });
-            };
         }
     </script>
     <script async src="{% static 'opencv-4.13.0.js' %}" onload="onOpenCvReady();" type="text/javascript"></script>
