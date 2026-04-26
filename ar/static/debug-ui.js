@@ -1,7 +1,6 @@
 const controls = {
     warpSize: document.getElementById('ctrl-warp-size'),
     borderSize: document.getElementById('ctrl-border-size'),
-    interiorSize: document.getElementById('ctrl-interior-size'),
     epsilonCoeff: document.getElementById('ctrl-epsilon-coeff'),
     minArea: document.getElementById('ctrl-min-area'),
     blackBorderThreshold: document.getElementById('ctrl-black-border-threshold'),
@@ -17,7 +16,6 @@ const controls = {
 const values = {
     warpSize: document.getElementById('val-warp-size'),
     borderSize: document.getElementById('val-border-size'),
-    interiorSize: document.getElementById('val-interior-size'),
     epsilonCoeff: document.getElementById('val-epsilon-coeff'),
     minArea: document.getElementById('val-min-area'),
     blackBorderThreshold: document.getElementById('val-black-border-threshold'),
@@ -37,21 +35,10 @@ function clampFloat(value, min, max) {
     return Math.max(min, Math.min(max, value));
 }
 
-function enforceGeometry() {
-    const maxBorder = Math.floor((config.warpSize - 1) / 2);
-    config.borderSize = clampInt(config.borderSize, 4, Math.max(4, maxBorder));
-
-    const maxInterior = Math.max(1, config.warpSize - 2 * config.borderSize);
-    config.interiorSize = clampInt(config.interiorSize, 1, maxInterior);
-}
 
 function syncControls() {
-    enforceGeometry();
-
     controls.warpSize.value = String(config.warpSize);
     controls.borderSize.value = String(config.borderSize);
-    controls.interiorSize.max = String(Math.max(1, config.warpSize - 2 * config.borderSize));
-    controls.interiorSize.value = String(config.interiorSize);
     controls.epsilonCoeff.value = String(config.epsilonCoeff);
     controls.minArea.value = String(config.minArea);
     controls.blackBorderThreshold.value = String(config.blackBorderThreshold);
@@ -65,7 +52,6 @@ function syncControls() {
 
     values.warpSize.textContent = String(config.warpSize);
     values.borderSize.textContent = String(config.borderSize);
-    values.interiorSize.textContent = String(config.interiorSize);
     values.epsilonCoeff.textContent = config.epsilonCoeff.toFixed(3);
     values.minArea.textContent = String(config.minArea);
     values.blackBorderThreshold.textContent = config.blackBorderThreshold.toFixed(2);
@@ -90,10 +76,6 @@ function bindControls() {
         syncControls();
     });
 
-    controls.interiorSize.addEventListener('input', (event) => {
-        config.interiorSize = clampInt(Number(event.target.value), 1, 192);
-        syncControls();
-    });
 
     controls.epsilonCoeff.addEventListener('input', (event) => {
         config.epsilonCoeff = clampFloat(Number(event.target.value), 0.01, 0.05);
@@ -176,7 +158,6 @@ function drawDebugGrid() {
 
     const scale = DEBUG_DISPLAY_SIZE / config.warpSize;
     const borderPx = config.borderSize * scale;
-    const interiorPx = config.interiorSize * scale;
 
     for (let idx = 0; idx < debugWarps.length; ++idx) {
         const col = idx % cols;
@@ -186,15 +167,6 @@ function drawDebugGrid() {
 
         debugCtx.drawImage(debugWarps[idx], x, y, DEBUG_DISPLAY_SIZE, DEBUG_DISPLAY_SIZE);
 
-        debugCtx.strokeStyle = '#ff0000';
-        debugCtx.lineWidth = 2;
-        debugCtx.strokeRect(x + borderPx, y + borderPx,
-            Math.max(0, DEBUG_DISPLAY_SIZE - 2 * borderPx),
-            Math.max(0, DEBUG_DISPLAY_SIZE - 2 * borderPx));
-
-        debugCtx.strokeStyle = '#00ff00';
-        debugCtx.lineWidth = 2;
-        debugCtx.strokeRect(x + borderPx, y + borderPx, interiorPx, interiorPx);
 
         const centroidX = x + DEBUG_DISPLAY_SIZE / 2;
         const centroidY = y + DEBUG_DISPLAY_SIZE / 2;

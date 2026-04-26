@@ -10,6 +10,7 @@
           <video id="front-camera" autoplay="" playsinline="" muted=""></video>
       </div>
       <canvas id="output-canvas"></canvas>
+      <img id="gueixa" style="display:none;" src="{% static 'gueixa_no_border.png' %}">
     </div>
     <p id="status">Waiting for OpenCV...</p>
     <div id="controls-panel">
@@ -17,7 +18,6 @@
         <div id="controls-grid">
             <div class="control-item"><label for="ctrl-warp-size">Warp Size</label><input id="ctrl-warp-size" type="range" min="64" max="256" step="8"><span id="val-warp-size" class="control-value"></span></div>
             <div class="control-item"><label for="ctrl-border-size">Border Size</label><input id="ctrl-border-size" type="range" min="4" max="64" step="1"><span id="val-border-size" class="control-value"></span></div>
-            <div class="control-item"><label for="ctrl-interior-size">Interior Size</label><input id="ctrl-interior-size" type="range" min="16" max="192" step="1"><span id="val-interior-size" class="control-value"></span></div>
             <div class="control-item"><label for="ctrl-epsilon-coeff">Epsilon Coeff</label><input id="ctrl-epsilon-coeff" type="range" min="0.01" max="0.05" step="0.005"><span id="val-epsilon-coeff" class="control-value"></span></div>
             <div class="control-item"><label for="ctrl-min-area">Min Area</label><input id="ctrl-min-area" type="range" min="200" max="2000" step="50"><span id="val-min-area" class="control-value"></span></div>
             <div class="control-item"><label for="ctrl-max-side-ratio">Max Side Ratio</label><input id="ctrl-max-side-ratio" type="range" min="1.0" max="10.0" step="0.1"><span id="val-max-side-ratio" class="control-value"></span></div>
@@ -44,10 +44,9 @@
         const DEFAULTS = {
             warpSize: 128,
             borderSize: 26,
-            interiorSize: 76,
             temporalConfirmFrames: 4,
             trackStaleFrames: 6,
-            centroidGrid: 22,
+            centroidGrid: 50,
             minArea: 500,
             epsilonCoeff: 0.025,
             blackBorderThreshold: 0.65,
@@ -77,54 +76,6 @@
             statusEl.textContent = text;
         }
 
-        function warpAndCheckMarker(approx, grayBinary, originalSrc) {
-            const ordered = orderPoints(approx);
-            const srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
-                ordered[0].x, ordered[0].y,
-                ordered[1].x, ordered[1].y,
-                ordered[2].x, ordered[2].y,
-                ordered[3].x, ordered[3].y,
-            ]);
-            const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
-                0,                 0,
-                config.warpSize-1, 0,
-                config.warpSize-1, config.warpSize-1,
-                0,                 config.warpSize-1,
-            ]);
-
-            const M = cv.getPerspectiveTransform(srcPts, dstPts);
-            const warped = new cv.Mat();
-            cv.warpPerspective(grayBinary, warped, M, new cv.Size(config.warpSize, config.warpSize));
-
-            const fullMean = cv.mean(warped)[0];
-            const innerRect = new cv.Rect(config.borderSize, config.borderSize, config.interiorSize, config.interiorSize);
-            const innerRoi = warped.roi(innerRect);
-            const innerMean = cv.mean(innerRoi)[0];
-
-            const borderArea = config.warpSize * config.warpSize - config.interiorSize * config.interiorSize;
-            const borderSum = fullMean * config.warpSize * config.warpSize - innerMean * config.interiorSize * config.interiorSize;
-            const borderBlackRatio = 1 - (borderSum / borderArea) / 255;
-
-            let interior = null;
-            if (borderBlackRatio >= config.blackBorderThreshold) {
-                if (DEBUG_MODE && originalSrc) {
-                    const colorWarped = new cv.Mat();
-                    cv.warpPerspective(originalSrc, colorWarped, M, new cv.Size(config.warpSize, config.warpSize));
-                    addDebugWarp(colorWarped);
-                    colorWarped.delete();
-                }
-                interior = innerRoi.clone();
-            }
-
-            srcPts.delete();
-            dstPts.delete();
-            M.delete();
-            innerRoi.delete();
-            warped.delete();
-
-            return interior;
-        }
-
         function updateTrack(key, approx) {
             const prev = tracks.get(key);
             if (!prev) {
@@ -132,6 +83,7 @@
                     consecutive: 1,
                     lastSeen: frameNumber,
                     approx: approx.clone(),
+                    match: null
                 });
                 return;
             }
@@ -149,6 +101,39 @@
                     tracks.delete(key);
                 }
             }
+        }
+
+        function warpAndCheckMarker(approx, originalSrc) {
+            const ordered = orderPoints(approx);
+            const srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+                ordered[0].x, ordered[0].y,
+                ordered[1].x, ordered[1].y,
+                ordered[2].x, ordered[2].y,
+                ordered[3].x, ordered[3].y,
+            ]);
+            const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+                0,                 0,
+                config.warpSize-1, 0,
+                config.warpSize-1, config.warpSize-1,
+                0,                 config.warpSize-1,
+            ]);
+
+            const M = cv.getPerspectiveTransform(srcPts, dstPts);
+            const warped = new cv.Mat();
+            cv.warpPerspective(originalSrc, warped, M, new cv.Size(config.warpSize, config.warpSize));
+
+            if (DEBUG_MODE && originalSrc) {
+                const colorWarped = new cv.Mat();
+                warped.copyTo(colorWarped);
+                addDebugWarp(colorWarped);
+                colorWarped.delete();
+            }
+
+            srcPts.delete();
+            dstPts.delete();
+            M.delete();
+
+            return warped;
         }
 
         function processFrame() {
@@ -225,12 +210,28 @@
                 cv.drawContours(dst, contourVec, -1, debugColor, 2, cv.LINE_8);
                 contourVec.delete();
 
-                const interior = warpAndCheckMarker(approx, gray, src);
+                const warped_marker = warpAndCheckMarker(approx, src);
 
-                if (interior !== null) {
+                if (warped_marker !== null) {
                     const key = centroidKey(approx);
                     updateTrack(key, approx);
-                    interior.delete();
+                    marker = tracks.get(key);
+                    if (marker.match == null) {
+                        const gueixa_image = document.getElementById("gueixa");
+                        const gueixa_mat = cv.imread(gueixa_image, cv.IMREAD_COLOR);
+                        cv.resize(gueixa_mat, gueixa_mat, new cv.Size(128, 128));
+                        const matchResult = new cv.Mat();
+                        cv.matchTemplate(warped_marker, gueixa_mat, matchResult, cv.TM_CCOEFF_NORMED);
+                        console.log(`Match result for track ${key} :`, matchResult.data32F[0]);
+                        if (matchResult.data32F[0] >= 0.7){
+                            marker.match = matchResult.data32F[0];
+                        }
+                        matchResult.delete();
+                        gueixa_mat.delete();
+                    } else {
+                        // console.log("Gueixa already matched for track with confidence", key, marker.match);
+                    }
+                    warped_marker.delete();
                 }
 
                 approx.delete();
