@@ -9,6 +9,7 @@ const controls = {
     maxSideRatio: document.getElementById('ctrl-max-side-ratio'),
     temporalConfirmFrames: document.getElementById('ctrl-temporal-confirm-frames'),
     trackStaleFrames: document.getElementById('ctrl-track-stale-frames'),
+    centerTrackThreshold: document.getElementById('ctrl-center-track-threshold'),
     centroidGrid: document.getElementById('ctrl-centroid-grid'),
     processEveryNFrames: document.getElementById('ctrl-process-every-n-frames'),
 };
@@ -23,6 +24,7 @@ const values = {
     maxSideRatio: document.getElementById('val-max-side-ratio'),
     temporalConfirmFrames: document.getElementById('val-temporal-confirm-frames'),
     trackStaleFrames: document.getElementById('val-track-stale-frames'),
+    centerTrackThreshold: document.getElementById('val-center-track-threshold'),
     centroidGrid: document.getElementById('val-centroid-grid'),
     processEveryNFrames: document.getElementById('val-process-every-n-frames'),
 };
@@ -47,6 +49,7 @@ function syncControls() {
     controls.maxSideRatio.value = String(config.maxSideRatio);
     controls.temporalConfirmFrames.value = String(config.temporalConfirmFrames);
     controls.trackStaleFrames.value = String(config.trackStaleFrames);
+    controls.centerTrackThreshold.value = String(config.centerTrackThreshold);
     controls.centroidGrid.value = String(config.centroidGrid);
     controls.processEveryNFrames.value = String(config.processEveryNFrames);
 
@@ -59,6 +62,7 @@ function syncControls() {
     values.maxSideRatio.textContent = config.maxSideRatio.toFixed(2);
     values.temporalConfirmFrames.textContent = String(config.temporalConfirmFrames);
     values.trackStaleFrames.textContent = String(config.trackStaleFrames);
+    values.centerTrackThreshold.textContent = String(config.centerTrackThreshold);
     values.centroidGrid.textContent = String(config.centroidGrid);
     values.processEveryNFrames.textContent = String(config.processEveryNFrames);
 
@@ -114,6 +118,11 @@ function bindControls() {
 
     controls.trackStaleFrames.addEventListener('input', (event) => {
         config.trackStaleFrames = clampInt(Number(event.target.value), 2, 12);
+        syncControls();
+    });
+
+    controls.centerTrackThreshold.addEventListener('input', (event) => {
+        config.centerTrackThreshold = clampInt(Number(event.target.value), 10, 200);
         syncControls();
     });
 
