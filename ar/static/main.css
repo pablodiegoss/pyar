@@ -6,8 +6,23 @@
 }
 
 #video-container,
-#output-canvas {
+#canvas-container {
     flex: 0 0 auto;
+}
+
+#canvas-container {
+    position: relative;
+}
+
+#output-canvas {
+    display: block;
+}
+
+#three-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
 }
 
 #controls-panel {

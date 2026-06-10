@@ -73,8 +73,8 @@ async function initializePipeline() {
 
     await startCamera();
 
-    canvasEl.width = videoEl.videoWidth;
-    canvasEl.height = videoEl.videoHeight;
+    canvasEl.width = RENDER_WIDTH;
+    canvasEl.height = RENDER_HEIGHT;
 
     setStatus('Processing video with OpenCV.js');
     animationId = requestAnimationFrame(processFrame);

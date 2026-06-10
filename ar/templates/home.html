@@ -8,11 +8,22 @@
     <div id="main-view">
       <div id="video-container">
           <video id="front-camera" autoplay="" playsinline="" muted=""></video>
+          <canvas id="three-canvas"></canvas>
       </div>
-      <canvas id="output-canvas"></canvas>
+      <div id="canvas-container">
+        <canvas id="output-canvas"></canvas>
+      </div>
+      
       <img id="gueixa" style="display:none;" src="{% static 'gueixa_no_border.png' %}">
       <img id="glenda" style="display:none;" src="{% static 'glenda.png' %}">
     </div>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "{% static 'three-js/three-0.184.0.js' %}"
+        }
+    }
+    </script>
     <p id="status">Waiting for OpenCV...</p>
     <div id="controls-panel">
         <h3>Runtime Tuning</h3>
@@ -36,12 +47,22 @@
     <script src="{% static 'ar-detection-utils.js' %}"></script>
     <script src="{% static 'debug-ui.js' %}"></script>
     <script>
+        const RENDER_WIDTH = 640;
+        const RENDER_HEIGHT = 480;
+
         const videoEl = document.getElementById('front-camera');
         const canvasEl = document.getElementById('output-canvas');
+        const threeCanvasEl = document.getElementById('three-canvas');
         const debugCanvasEl = document.getElementById('debug-canvas');
         const debugCtx = debugCanvasEl.getContext('2d');
         const statusEl = document.getElementById('status');
         const ctx = canvasEl.getContext('2d');
+
+        // Set canvas sizes immediately from constants
+        canvasEl.width = RENDER_WIDTH;
+        canvasEl.height = RENDER_HEIGHT;
+        threeCanvasEl.width = RENDER_WIDTH;
+        threeCanvasEl.height = RENDER_HEIGHT;
         
         const DEFAULTS = {
             warpSize: 128,
@@ -273,6 +294,9 @@
                 if (frameNumber - track.lastSeen > config.trackStaleFrames) {
                     track.approx.delete();
                     tracks.delete(key);
+                    if (window.arOverlay) {
+                        window.arOverlay.removeOverlayMesh(key);
+                    }
                 }
             }
         }
@@ -431,6 +455,19 @@
                 }
             }
 
+            // Update Three.js overlays for confirmed tracks
+            if (window.arOverlay) {
+                for (const track of tracks.values()) {
+                    if (track.lastSeen === frameNumber && track.consecutive >= config.temporalConfirmFrames && track.match) {
+                        window.arOverlay.updateOverlayPose(track.id, track, canvasEl.width, canvasEl.height);
+                    } else {
+                        window.arOverlay.hideOverlayMesh(track.id);
+                    }
+                }
+                window.arOverlay.cleanupStaleTracks(new Set(tracks.keys()));
+                window.arOverlay.renderThreeOverlay();
+            }
+
             if (confirmedCount > 0) {
                 setStatus(`Markers confirmed: ${confirmedCount} [${confirmedIds.join(', ')}]`);
             } else {
@@ -456,6 +493,17 @@
 
         bindControls();
         syncControls();
+    </script>
+    <script type="module">
+        import { initThreeOverlay, renderThreeOverlay, resizeThreeOverlay, updateOverlayPose, removeOverlayMesh, hideOverlayMesh, cleanupStaleTracks } from '{% static "ar-three-overlay.js" %}';
+
+        // Expose overlay API globally so the non-module processFrame can access it
+        window.arOverlay = { initThreeOverlay, renderThreeOverlay, resizeThreeOverlay, updateOverlayPose, removeOverlayMesh, hideOverlayMesh, cleanupStaleTracks };
+
+        // Initialize Three.js overlay with the same fixed render size
+        const threeCanvas = document.getElementById('three-canvas');
+        initThreeOverlay(threeCanvas, RENDER_WIDTH, RENDER_HEIGHT);
+        console.log('Three.js AR overlay initialized', RENDER_WIDTH, 'x', RENDER_HEIGHT);
     </script>
     <script async src="{% static 'opencv-4.13.0.js' %}" onload="onOpenCvReady();" type="text/javascript"></script>
 </body>
