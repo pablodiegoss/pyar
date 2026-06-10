@@ -13,7 +13,7 @@ export function initThreeOverlay(threeCanvas, width, height) {
     focalLength = width; // approximate: fx ≈ fy ≈ canvas width
 
     renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, alpha: true, antialias: true });
-    renderer.setSize(width, height);
+    renderer.setSize(width, height, false); // false = don't set CSS style, let CSS handle display size
     renderer.setClearColor(0x000000, 0);
 
     scene = new THREE.Scene();
@@ -224,13 +224,34 @@ function orderPointsFromApprox(approx) {
         pts.push({ x: approx.data32S[i * 2], y: approx.data32S[i * 2 + 1] });
     }
 
-    // Order: TL, TR, BR, BL (same as orderPoints in ar-detection-utils.js)
-    pts.sort((a, b) => (a.x + a.y) - (b.x + b.y));
-    const tl = pts[0];
-    const br = pts[3];
-    const mid = [pts[1], pts[2]];
-    mid.sort((a, b) => (a.y - a.x) - (b.y - b.x));
-    return [tl, mid[0], br, mid[1]];
+    // Sort by angle from centroid — this gives a perfectly stable cyclic
+    // ordering regardless of rotation (unlike the x+y heuristic which flips at 45°)
+    const cx = (pts[0].x + pts[1].x + pts[2].x + pts[3].x) / 4;
+    const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
+
+    pts.sort((a, b) => {
+        return Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx);
+    });
+
+    // pts is now in consistent counter-clockwise order (screen coords, so visually CW)
+    // Find the corner closest to top-left (smallest x + y) as the starting anchor
+    let minSum = Infinity;
+    let startIdx = 0;
+    for (let i = 0; i < 4; i++) {
+        const sum = pts[i].x + pts[i].y;
+        if (sum < minSum) {
+            minSum = sum;
+            startIdx = i;
+        }
+    }
+
+    // Return in order: TL, TR, BR, BL (cyclic from startIdx)
+    return [
+        pts[startIdx],
+        pts[(startIdx + 1) % 4],
+        pts[(startIdx + 2) % 4],
+        pts[(startIdx + 3) % 4],
+    ];
 }
 
 export function renderThreeOverlay() {
@@ -243,7 +264,7 @@ export function resizeThreeOverlay(width, height) {
     canvasWidth = width;
     canvasHeight = height;
     focalLength = width;
-    renderer.setSize(width, height);
+    renderer.setSize(width, height, false);
     setCameraProjection(width, height, focalLength);
 }
 

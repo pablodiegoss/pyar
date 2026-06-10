@@ -6,13 +6,13 @@
 </head>
 <body>
     <div id="main-view">
-      <div id="video-container">
+        <div id="video-container">
           <video id="front-camera" autoplay="" playsinline="" muted=""></video>
           <canvas id="three-canvas"></canvas>
-      </div>
-      <div id="canvas-container">
-        <canvas id="output-canvas"></canvas>
-      </div>
+        </div>
+        <div id="canvas-container">
+            <canvas id="output-canvas"></canvas>
+        </div>
       
       <img id="gueixa" style="display:none;" src="{% static 'gueixa_no_border.png' %}">
       <img id="glenda" style="display:none;" src="{% static 'glenda.png' %}">
@@ -289,6 +289,32 @@
             return bestMatch;
         }
 
+        function updateRotationForTemplate(markerMat, templateId) {
+            const templates = getTemplateCandidates();
+            const template = templates.find(t => t.id === templateId);
+            if (!template) return null;
+
+            const rotations = buildRotations(markerMat);
+            let bestRotation = null;
+
+            for (const rotation of rotations) {
+                const matchResult = new cv.Mat();
+                cv.matchTemplate(rotation.mat, template.mat, matchResult, cv.TM_CCOEFF_NORMED);
+                const confidence = matchResult.data32F[0];
+                matchResult.delete();
+
+                if (confidence >= MATCH_THRESHOLD && (!bestRotation || confidence > bestRotation.confidence)) {
+                    bestRotation = { rotationDeg: rotation.degrees, confidence };
+                }
+            }
+
+            for (const rotation of rotations) {
+                rotation.mat.delete();
+            }
+
+            return bestRotation;
+        }
+
         function pruneStaleTracks() {
             for (const [key, track] of tracks.entries()) {
                 if (frameNumber - track.lastSeen > config.trackStaleFrames) {
@@ -431,7 +457,12 @@
                         }
                         
                     } else {
-                        // console.log("Glenda already matched for track with confidence", key, marker.match);
+                        // Update rotation cheaply: only check 4 rotations of the known template
+                        const rotUpdate = updateRotationForTemplate(warped_marker, marker.match.templateId);
+                        if (rotUpdate) {
+                            marker.match.rotationDeg = rotUpdate.rotationDeg;
+                            marker.match.confidence = rotUpdate.confidence;
+                        }
                     }
                     warped_marker.delete();
                 }
