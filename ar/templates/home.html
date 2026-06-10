@@ -47,7 +47,7 @@
             warpSize: 128,
             borderSize: 26,
             temporalConfirmFrames: 4,
-            trackStaleFrames: 6,
+            trackStaleFrames: 60,
             centerTrackThreshold: 60,
             centroidGrid: 50,
             minArea: 500,
@@ -73,6 +73,9 @@
 
         const tracks = new Map();
         const debugWarps = [];
+        const MATCH_THRESHOLD = 0.7;
+        let templateCache = [];
+        let templateCacheWarpSize = null;
 
     
         function setStatus(text) {
@@ -172,6 +175,97 @@
             }
 
             ctx.restore();
+        }
+
+        function clearTemplateCache() {
+            for (const template of templateCache) {
+                template.mat.delete();
+            }
+            templateCache = [];
+            templateCacheWarpSize = null;
+        }
+
+        function getTemplateCandidates() {
+            if (templateCacheWarpSize === config.warpSize && templateCache.length > 0) {
+                return templateCache;
+            }
+
+            clearTemplateCache();
+
+            const imageElements = Array.from(document.querySelectorAll('#main-view img[id]'));
+            for (const imageElement of imageElements) {
+                const templateMat = cv.imread(imageElement, cv.IMREAD_COLOR);
+                if (templateMat.empty()) {
+                    templateMat.delete();
+                    continue;
+                }
+
+                cv.resize(templateMat, templateMat, new cv.Size(config.warpSize, config.warpSize));
+                templateCache.push({
+                    id: imageElement.id,
+                    mat: templateMat
+                });
+            }
+
+            templateCacheWarpSize = config.warpSize;
+            return templateCache;
+        }
+
+        function buildRotations(baseMat) {
+            const rotations = [
+                { degrees: 0, mat: baseMat.clone() }
+            ];
+
+            const rotate90 = new cv.Mat();
+            cv.rotate(baseMat, rotate90, cv.ROTATE_90_CLOCKWISE);
+            rotations.push({ degrees: 90, mat: rotate90 });
+
+            const rotate180 = new cv.Mat();
+            cv.rotate(baseMat, rotate180, cv.ROTATE_180);
+            rotations.push({ degrees: 180, mat: rotate180 });
+
+            const rotate270 = new cv.Mat();
+            cv.rotate(baseMat, rotate270, cv.ROTATE_90_COUNTERCLOCKWISE);
+            rotations.push({ degrees: 270, mat: rotate270 });
+
+            return rotations;
+        }
+
+        function findBestTemplateMatch(markerMat) {
+            const templates = getTemplateCandidates();
+            if (templates.length === 0) {
+                return null;
+            }
+
+            const rotations = buildRotations(markerMat);
+            let bestMatch = null;
+
+            for (const template of templates) {
+                for (const rotation of rotations) {
+                    const matchResult = new cv.Mat();
+                    cv.matchTemplate(rotation.mat, template.mat, matchResult, cv.TM_CCOEFF_NORMED);
+                    const confidence = matchResult.data32F[0];
+                    matchResult.delete();
+
+                    if (confidence < MATCH_THRESHOLD) {
+                        continue;
+                    }
+
+                    if (!bestMatch || confidence > bestMatch.confidence) {
+                        bestMatch = {
+                            templateId: template.id,
+                            confidence,
+                            rotationDeg: rotation.degrees
+                        };
+                    }
+                }
+            }
+
+            for (const rotation of rotations) {
+                rotation.mat.delete();
+            }
+
+            return bestMatch;
         }
 
         function pruneStaleTracks() {
@@ -304,17 +398,14 @@
                     updateTrack(trackId, approx, center);
                     const marker = tracks.get(trackId);
                     if (marker.match == null) {
-                        const glenda_image = document.getElementById("glenda");
-                        const glenda_mat = cv.imread(glenda_image, cv.IMREAD_COLOR);
-                        cv.resize(glenda_mat, glenda_mat, new cv.Size(128, 128));
-                        const matchResult = new cv.Mat();
-                        cv.matchTemplate(warped_marker, glenda_mat, matchResult, cv.TM_CCOEFF_NORMED);
-                        console.log(`Match result for track ${trackId} :`, matchResult.data32F[0]);
-                        if (matchResult.data32F[0] >= 0.7){
-                            marker.match = matchResult.data32F[0];
+                        const bestMatch = findBestTemplateMatch(warped_marker);
+                        if (bestMatch) {
+                            marker.match = bestMatch;
+                            console.log(
+                                `Best match for track ${trackId}: ${bestMatch.templateId} rot=${bestMatch.rotationDeg} conf=${bestMatch.confidence.toFixed(3)}`
+                            );
                         }
-                        matchResult.delete();
-                        glenda_mat.delete();
+                        
                     } else {
                         // console.log("Glenda already matched for track with confidence", key, marker.match);
                     }
