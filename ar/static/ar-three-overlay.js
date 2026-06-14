@@ -49,12 +49,20 @@ function setCameraProjection(w, h, f) {
     camera.projectionMatrixInverse.copy(projMatrix).invert();
 }
 
-function getOrCreateTexture(imageElementId) {
-    if (textureCache.has(imageElementId)) {
-        return textureCache.get(imageElementId);
+function getOrCreateTexture(markerId) {
+    if (textureCache.has(markerId)) {
+        return textureCache.get(markerId);
     }
 
-    const imgEl = document.getElementById(imageElementId);
+    // Find the ar-marker element with this markerId and use its content image
+    const markerEls = document.querySelectorAll('ar-marker');
+    let imgEl = null;
+    for (const el of markerEls) {
+        if (el.markerId === markerId) {
+            imgEl = el._contentImg || el._markerImg;
+            break;
+        }
+    }
     if (!imgEl) return null;
 
     const texture = new THREE.Texture(imgEl);
@@ -62,7 +70,7 @@ function getOrCreateTexture(imageElementId) {
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
     texture.colorSpace = THREE.SRGBColorSpace;
-    textureCache.set(imageElementId, texture);
+    textureCache.set(markerId, texture);
     return texture;
 }
 

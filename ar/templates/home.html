@@ -14,8 +14,12 @@
             <canvas id="output-canvas"></canvas>
         </div>
       
-      <img id="gueixa" style="display:none;" src="{% static 'gueixa_no_border.png' %}">
-      <img id="glenda" style="display:none;" src="{% static 'glenda.png' %}">
+      <ar-marker src="{% static 'markers/gueixa_no_border.png' %}">
+          <ar-content src="{% static 'objects/temaki.png' %}" type="gif" metadata="{% static 'objects/temaki.json' %}"></ar-content>
+      </ar-marker>
+      <ar-marker src="{% static 'markers/glenda.png' %}">
+          <ar-content src="{% static 'markers/gueixa_no_border.png' %}" type="img"></ar-content>
+      </ar-marker>
     </div>
     <script type="importmap">
     {
@@ -213,9 +217,12 @@
 
             clearTemplateCache();
 
-            const imageElements = Array.from(document.querySelectorAll('#main-view img[id]'));
-            for (const imageElement of imageElements) {
-                const templateMat = cv.imread(imageElement, cv.IMREAD_COLOR);
+            const imageElements = Array.from(document.querySelectorAll('ar-marker'));
+            for (const markerEl of imageElements) {
+                const imgEl = markerEl._markerImg;
+                if (!imgEl || !imgEl.complete || imgEl.naturalWidth === 0) continue;
+
+                const templateMat = cv.imread(imgEl, cv.IMREAD_COLOR);
                 if (templateMat.empty()) {
                     templateMat.delete();
                     continue;
@@ -223,7 +230,7 @@
 
                 cv.resize(templateMat, templateMat, new cv.Size(config.warpSize, config.warpSize));
                 templateCache.push({
-                    id: imageElement.id,
+                    id: markerEl.markerId,
                     mat: templateMat
                 });
             }
